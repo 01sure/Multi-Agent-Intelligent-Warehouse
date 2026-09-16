@@ -10,7 +10,7 @@
 #   MAIW_MCP_TRANSPORT=streamable-http
 #   MAIW_MCP_INVENTORY_PORT=8765   (or EQUIPMENT/LABOR/WAVE variants)
 
-FROM python:3.11-slim AS base
+FROM python:3.14-slim AS base
 
 ARG MCP_DOMAIN=inventory
 
