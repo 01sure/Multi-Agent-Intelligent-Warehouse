@@ -1,0 +1,19 @@
+name: SonarQube Analysis
+
+# Upstream uses NVIDIA-AI-Blueprints/sonarqube-workflows (not callable from T-DevH).
+# SonarCloud "Code Analysis" on pushes is the SonarCloud GitHub App, not this workflow.
+# To stop failed SonarCloud checks: GitHub repo Settings → Integrations → SonarCloud
+# → Configure → remove this repository (or create the project on sonarcloud.io).
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sonarqube-fork-notice:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SonarQube not configured on this mirror
+        run: |
+          echo "SonarQube reusable workflows are only wired on NVIDIA-AI-Blueprints/Multi-Agent-Intelligent-Warehouse."
+          echo "This T-DevH mirror does not call sonarqube-workflows to avoid workflow startup failures."
+          echo "For quality scans here, either disconnect the SonarCloud GitHub App or onboard the repo at https://sonarcloud.io"

@@ -1,0 +1,45 @@
+# Security Blocklist: Packages that should NEVER be installed
+#
+# This file lists packages that are blocked due to security vulnerabilities
+# or dangerous capabilities. These packages will be automatically detected
+# and blocked by the dependency blocklist checker.
+#
+# DO NOT ADD THESE PACKAGES TO requirements.txt
+# DO NOT INSTALL THESE PACKAGES IN PRODUCTION
+#
+# For more information, see:
+# - docs/security/PYTHON_REPL_SECURITY.md
+# - scripts/security/dependency_blocklist.py
+
+# LangChain Experimental - Contains Python REPL vulnerabilities
+# CVE-2024-38459: Unauthorized Python REPL access without opt-in
+# CVE-2024-46946: Code execution via sympy.sympify
+# CVE-2024-21513: Code execution via VectorSQLDatabaseChain
+# CVE-2023-44467: Arbitrary code execution via PALChain
+langchain-experimental
+langchain_experimental
+
+# LangChain (old package) - Contains path traversal vulnerability
+# CVE-2024-28088: Directory traversal in load_chain/load_prompt/load_agent
+# Affected: langchain <= 0.1.10, langchain-core < 0.1.29
+# Note: This codebase uses langchain-core>=1.2.6 (safe, includes CVE-2025-68664 fix), but blocking
+# the old langchain package prevents accidental installation
+langchain<0.1.11
+
+# LangGraph Checkpoint - RCE vulnerability in JsonPlusSerializer
+# CVE-2025-64439: Remote Code Execution in JsonPlusSerializer when deserializing payloads
+# Affected: langgraph-checkpoint < 3.0.0 (versions 2.1.2 and below)
+# Note: This codebase uses langgraph-checkpoint>=3.0.0 (safe), but blocking vulnerable versions
+# prevents accidental installation of old versions
+langgraph-checkpoint<3.0.0
+
+# LangGraph SQLite Checkpoint - RCE vulnerability (uses vulnerable langgraph-checkpoint)
+# CVE-2025-64439: Remote Code Execution in JsonPlusSerializer
+# Affected: langgraph-checkpoint-sqlite < 3.0.0 (depends on langgraph-checkpoint < 3.0.0)
+# Note: We don't use SQLite checkpoint (we use in-memory state), but blocking prevents
+# accidental installation. The vulnerability is in the base langgraph-checkpoint package.
+langgraph-checkpoint-sqlite<3.0.0
+
+# Other potentially dangerous packages
+# (Add more as needed)
+

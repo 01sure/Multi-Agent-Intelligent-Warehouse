@@ -1,0 +1,54 @@
+fastapi>=0.120.0  # Upgraded to support starlette>=0.49.1 required by nemoguardrails 0.19.0
+starlette>=0.49.1  # Required by nemoguardrails 0.19.0, compatible with fastapi>=0.120.0
+uvicorn[standard]==0.30.1
+pydantic>=2.7
+httpx>=0.27.0
+python-dotenv>=1.0
+loguru>=0.7
+langgraph>=1.0.5  # Security: Fixed CVE-2025-8709 (SQL injection in langgraph-checkpoint-sqlite) in 2.0.11+. We use 1.0.5+ (includes fix). Note: We use in-memory state (no SQLite checkpoint) as additional defense.
+langgraph-checkpoint>=3.0.0  # Security: Fixed CVE-2025-64439 (RCE in JsonPlusSerializer). Version 3.0.0+ fixes RCE vulnerability. Note: We use in-memory state (no checkpoint backend), but pinning secure version for transitive dependencies.
+asyncpg>=0.29.0
+anyio>=4.0.0  # Async file I/O for asyncio compatibility
+pymilvus>=2.3.0
+numpy>=1.24.0
+langchain-core>=1.2.6  # Security: Fixed CVE-2025-68664 (serialization injection) and CVE-2024-28088 (directory traversal). We use 1.2.6 (latest, includes fixes). Note: We use json.dumps(), not LangChain serialization, as additional defense.
+aiohttp>=3.13.3  # Security: Fixed zip bomb DoS (BDSA) in 3.13.3+ (DEFAULT_MAX_DECOMPRESS_SIZE=32MiB). Also fixes: CVE-2024-52304 (3.10.11+), CVE-2024-30251 (3.9.4+), CVE-2023-37276 (3.8.5+), CVE-2024-23829 (3.8.5+). Client-only usage (not server) = additional defense. C extensions enabled. See docs/security/VULNERABILITY_MITIGATIONS.md
+PyJWT>=2.8.0  # CVE-2025-45768 (disputed): Mitigated via application-level key validation enforcing 32+ byte keys (RFC 7518) in jwt_handler.py. Currently using 2.10.1. See docs/security/VULNERABILITY_MITIGATIONS.md
+passlib[bcrypt]>=1.7.4
+email-validator>=2.0.0
+PyYAML>=6.0
+prometheus-client>=0.19.0
+psutil>=5.9.0
+click>=8.0.0
+psycopg[binary]>=3.0.0
+websockets>=11.0.0
+paho-mqtt>=1.6.0
+pymodbus>=3.0.0
+bacpypes3>=0.0.100  # BACnet protocol library for IoT safety sensors (optional - only needed for BACnet integration)
+# ERP Integration
+requests>=2.32.4  # Fixed .netrc credentials leak (CVE-2024-47081) and Session verify=False persistence MITM (CVE-2024-35195)
+# RFID/Barcode Scanning
+pyserial>=3.5
+# Time Attendance
+# pybluez>=0.23  # Disabled: incompatible with Python 3.11+ (use_2to3 deprecated)
+tiktoken
+redis>=5.0.0
+python-multipart
+scikit-learn>=1.5.0  # Fixed information exposure in TfidfVectorizer/CountVectorizer stop_words_ (CVE-2024-5206)
+pandas>=1.2.4
+xgboost>=1.6.0
+# RAPIDS GPU acceleration (optional - requires NVIDIA GPU with CUDA 12.x)
+# Install with: pip install --extra-index-url=https://pypi.nvidia.com cudf-cu12 cuml-cu12
+# Or run: ./scripts/setup/install_rapids.sh
+# cudf-cu12>=24.8.0  # GPU-accelerated DataFrames (optional)
+# cuml-cu12>=24.8.0  # GPU-accelerated Machine Learning (optional)
+# Document Processing
+Pillow>=10.3.0  # Fixed buffer overflow in _imagingcms.c (CVE-2024-28219)
+pdf2image==1.17.0  # MIT License - PDF to image conversion (requires poppler-utils system package)
+pdfplumber==0.11.8  # MIT License - PDF text extraction (latest version)
+# NeMo Guardrails SDK (Phase 1 - Migration)
+# Note: nemoguardrails automatically installs transitive dependencies including:
+# langchain, langchain-community, fastembed, annoy, jinja2, lark, nest-asyncio,
+# prompt-toolkit, rich, simpleeval, typer, watchdog, and others.
+# These are managed as transitive dependencies and don't need to be listed explicitly.
+nemoguardrails>=0.19.0  # NVIDIA NeMo Guardrails SDK for programmable guardrails (latest version)

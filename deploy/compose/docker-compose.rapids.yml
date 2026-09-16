@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  rapids-forecasting:
+    build:
+      context: .
+      dockerfile: Dockerfile.rapids
+    container_name: rapids-forecasting
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - CUDA_VISIBLE_DEVICES=0
+    volumes:
+      - ./scripts:/app/scripts
+      - ./data:/app/data
+      # Forecast files are generated at runtime and saved to data/sample/forecasts/
+    networks:
+      - warehouse-network
+    depends_on:
+      - postgres
+    command: python scripts/rapids_gpu_forecasting.py
+
+  postgres:
+    image: timescale/timescaledb:latest-pg15
+    container_name: warehouse-postgres
+    environment:
+      POSTGRES_DB: warehouse
+      POSTGRES_USER: warehouse
+      # SECURITY: POSTGRES_PASSWORD must be set in .env file (no hardcoded defaults)
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./data/postgres:/docker-entrypoint-initdb.d
+    networks:
+      - warehouse-network
+
+volumes:
+  postgres_data:
+
+networks:
+  warehouse-network:
+    driver: bridge

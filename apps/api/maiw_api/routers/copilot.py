@@ -1,0 +1,333 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+"""
+Copilot API router — Phase 15D (ASK + ANALYZE + ACT).
+
+Endpoint
+--------
+POST /api/v1/copilot/turn
+
+Explicitly absent (trust boundary):
+    /copilot/approve      — MUST NOT exist
+    /copilot/execute      — MUST NOT exist
+    /copilot/force-action — MUST NOT exist
+
+These paths are validated by architecture invariant tests.
+
+ACT intent routes to CopilotService.act() which delegates governance to
+GovernedActionOrchestrator. The router has no direct access to DecisionEngine,
+ApprovalStore, or ActionExecutor.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from fastapi import APIRouter, HTTPException, Request
+
+from maiw_api.copilot import intent as intent_classifier
+from maiw_api.copilot.models import (
+    CopilotIntent,
+    CopilotTurnRequest,
+    CopilotTurnResponse,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/copilot", tags=["copilot"])
+
+_SAFETY_NOTE = "未对仓库做任何更改。"
+
+
+def _get_copilot_service(request: Request):
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="MAIW 运行时不可用。")
+    svc = getattr(runtime, "copilot_service", None)
+    if svc is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Copilot 服务不可用。请确保 MAIW_DEMO_MODE=true 且运行时已初始化。",
+        )
+    return svc
+
+
+@router.post("/turn", response_model=CopilotTurnResponse)
+async def copilot_turn(body: CopilotTurnRequest, request: Request):
+    """
+    Process one Copilot operator turn.
+
+    Phase 15C: ASK and ANALYZE intents. ACT detected but not executed.
+
+    The response for ASK/ANALYZE contains zero ActionProposals, zero
+    DecisionEngine evaluations, and zero warehouse mutations.
+    """
+    svc = _get_copilot_service(request)
+
+    # ── Classify intent ───────────────────────────────────────────────────────
+    detected_intent = intent_classifier.classify(body.message)
+
+    try:
+        if detected_intent == CopilotIntent.OBSERVE_OUTCOME:
+            # Determine whether the last ACT's pending approval is still in the queue.
+            # Also check the outcome cache so we can distinguish 'executed' from 'rejected'.
+            # Injected here so CopilotService never imports ApprovalStore or Controller.
+            is_still_pending: bool | None = None
+            pending_outcome: str | None = None
+            try:
+                from maiw_api.demo.controller import get_demo_controller
+                ctrl = get_demo_controller()
+                last_conv = svc.store.get_or_create(
+                    body.conversation_id,
+                    body.warehouse_id or "",
+                    body.scenario_name or "",
+                )
+                last_act = last_conv.last_act_result
+                if last_act is not None:
+                    pending_id = getattr(last_act, "pending_approval_id", None)
+                    if pending_id:
+                        live_ids = {p["pending_id"] for p in ctrl._pending_approvals}
+                        if pending_id in live_ids:
+                            is_still_pending = True
+                        else:
+                            # Not in live queue — check the terminal outcome cache.
+                            pending_outcome = ctrl._pending_approval_outcomes.get(pending_id)
+                            # is_still_pending=False only for rejected/expired (not executed).
+                            # For 'executed', let operational_improved guide the narrative.
+                            is_still_pending = False if pending_outcome in ("rejected", "expired") else None
+            except Exception:
+                pass  # controller unavailable — fall back to heuristic
+
+            result, turn = await svc.observe_outcome(
+                message=body.message,
+                conversation_id=body.conversation_id,
+                warehouse_id=body.warehouse_id,
+                scenario_name=body.scenario_name,
+                is_still_pending=is_still_pending,
+                pending_outcome=pending_outcome,
+            )
+            return _observe_response(result, turn)
+
+        if detected_intent == CopilotIntent.ACT:
+            result, turn = await svc.act(
+                message=body.message,
+                conversation_id=body.conversation_id,
+                warehouse_id=body.warehouse_id,
+                scenario_name=body.scenario_name,
+            )
+            return _act_response(result, turn)
+
+        if detected_intent == CopilotIntent.ANALYZE:
+            result, turn = await svc.analyze(
+                message=body.message,
+                conversation_id=body.conversation_id,
+                warehouse_id=body.warehouse_id,
+                scenario_name=body.scenario_name,
+            )
+            return _analyze_response(result, turn)
+
+        else:
+            # Default: ASK
+            result, turn = await svc.ask(
+                message=body.message,
+                conversation_id=body.conversation_id,
+                warehouse_id=body.warehouse_id,
+                scenario_name=body.scenario_name,
+            )
+            return _ask_response(result, turn)
+
+    except Exception as exc:
+        logger.error("copilot_turn: unexpected error — %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+def _observe_response(result, turn) -> CopilotTurnResponse:
+    return CopilotTurnResponse(
+        conversation_id=turn.conversation_id,
+        turn_id=turn.turn_id,
+        trace_id=turn.trace_id,
+        intent=turn.intent.value,
+        status="degraded" if result.degraded else "complete",
+        answer=result.answer,
+        evidence=[
+            {"label": e.label, "value": e.value, "severity": e.severity}
+            for e in result.evidence
+        ],
+        neighborhood={
+            "focus_entity_id": result.neighborhood.focus_entity_id,
+            "focus_entity_label": result.neighborhood.focus_entity_label,
+            "entity_count": len(result.neighborhood.entity_ids),
+            "relationship_summary": result.neighborhood.relationship_summary,
+            "graph_available": result.neighborhood.graph_available,
+        },
+        agent=result.agent,
+        model_id=result.model_id,
+        reasoning_level=result.reasoning_level,
+        routing_rule=result.routing_rule,
+        routing_reason=result.routing_reason,
+        latency_ms=result.latency_ms,
+        degraded=result.degraded,
+        degradation_reason=result.degradation_reason,
+        answerability=result.answerability,
+        missing_context=result.missing_context,
+        timing=result.timing,
+        safety_note=(
+            "仓库状态已变更——受控动作已通过 MAIW 流水线执行并确认。"
+            if result.execution_confirmed
+            else _SAFETY_NOTE
+        ),
+        observe_execution_confirmed=result.execution_confirmed,
+        observe_operational_improved=result.operational_improved,
+        observe_operational_summary=result.operational_summary,
+        observe_pre_metrics=result.pre_metrics,
+        observe_post_metrics=result.post_metrics,
+        observe_kpi_delta=result.kpi_delta,
+        observe_act_decision_outcome=result.act_decision_outcome,
+        observe_act_pending_approval_id=result.act_pending_approval_id,
+        related_artifacts={},
+    )
+
+
+def _act_response(result, turn) -> CopilotTurnResponse:
+    related_artifacts: dict = {}
+    if result.proposal_id:
+        related_artifacts["proposal_id"] = result.proposal_id
+    if result.decision_id:
+        related_artifacts["decision_id"] = result.decision_id
+    if result.pending_approval_id:
+        related_artifacts["pending_approval_id"] = result.pending_approval_id
+    if result.execution_id:
+        related_artifacts["execution_id"] = result.execution_id
+
+    return CopilotTurnResponse(
+        conversation_id=turn.conversation_id,
+        turn_id=turn.turn_id,
+        trace_id=turn.trace_id,
+        intent=turn.intent.value,
+        status="degraded" if result.degraded else "complete",
+        answer=result.message,
+        # ACT fields
+        act_recommendation_id=result.recommendation_id or None,
+        act_decision_outcome=result.decision_outcome,
+        act_proposal_id=result.proposal_id,
+        act_decision_id=result.decision_id,
+        act_pending_approval_id=result.pending_approval_id,
+        act_approval_required=result.approval_required,
+        act_execution_status=result.execution_status,
+        act_execution_id=result.execution_id,
+        act_mutation_state=result.mutation_state.value,
+        act_violations=result.violations,
+        act_source_snapshot_id=result.source_snapshot_id,
+        # Safety note is context-sensitive for ACT
+        safety_note=result.safety_note,
+        latency_ms=result.latency_ms,
+        degraded=result.degraded,
+        degradation_reason=result.degradation_reason,
+        related_artifacts=related_artifacts,
+    )
+
+
+def _ask_response(result, turn) -> CopilotTurnResponse:
+    return CopilotTurnResponse(
+        conversation_id=turn.conversation_id,
+        turn_id=turn.turn_id,
+        trace_id=turn.trace_id,
+        intent=turn.intent.value,
+        status="degraded" if result.degraded else "complete",
+        answer=result.answer,
+        evidence=[
+            {"label": e.label, "value": e.value, "severity": e.severity}
+            for e in result.evidence
+        ],
+        neighborhood={
+            "focus_entity_id": result.neighborhood.focus_entity_id,
+            "focus_entity_label": result.neighborhood.focus_entity_label,
+            "entity_count": len(result.neighborhood.entity_ids),
+            "relationship_summary": result.neighborhood.relationship_summary,
+            "graph_available": result.neighborhood.graph_available,
+        },
+        agent=result.agent,
+        skills_used=result.skills_used,
+        skills_available=result.skills_available,
+        model_id=result.model_id,
+        reasoning_level=result.reasoning_level,
+        routing_rule=result.routing_rule,
+        routing_reason=result.routing_reason,
+        requested_role=result.requested_role,
+        selected_role=result.selected_role,
+        fallback_from=result.fallback_from,
+        fallback_reason=result.fallback_reason,
+        latency_ms=result.latency_ms,
+        degraded=result.degraded,
+        degradation_reason=result.degradation_reason,
+        answerability=result.answerability,
+        missing_context=result.missing_context,
+        timing=result.timing,
+        related_artifacts={},
+        context_snapshot_id=turn.context_snapshot_id,  # Phase 17E
+    )
+
+
+def _analyze_response(result, turn) -> CopilotTurnResponse:
+    return CopilotTurnResponse(
+        conversation_id=turn.conversation_id,
+        turn_id=turn.turn_id,
+        trace_id=turn.trace_id,
+        intent=turn.intent.value,
+        status="degraded" if result.degraded else "complete",
+        # ASK-style answer field carries the summary for ANALYZE too
+        answer=result.summary,
+        summary=result.summary,
+        severity=result.severity,
+        evidence=[
+            {"label": e.label, "value": e.value, "severity": e.severity}
+            for e in result.evidence
+        ],
+        recommendations=[
+            {
+                "recommendation_id": r.recommendation_id,
+                "domain": r.domain,
+                "capability": r.capability,
+                "target": r.target,
+                "objective": r.objective,
+                "rationale": r.rationale,
+                "priority": r.priority,
+                "subtype": r.subtype,
+                "focus_entity_id": r.focus_entity_id,
+                "snapshot_id": r.snapshot_id,
+                "trace_id": r.trace_id,
+                "conversation_id": r.conversation_id,
+                "turn_id": r.turn_id,
+            }
+            for r in result.recommendations
+        ],
+        neighborhood={
+            "focus_entity_id": result.neighborhood.focus_entity_id,
+            "focus_entity_label": result.neighborhood.focus_entity_label,
+            "entity_count": len(result.neighborhood.entity_ids),
+            "relationship_summary": result.neighborhood.relationship_summary,
+            "graph_available": result.neighborhood.graph_available,
+        },
+        agent=result.agent,
+        skills_used=result.skills_used,
+        skills_available=result.skills_available,
+        model_id=result.model_id,
+        reasoning_level=result.reasoning_level,
+        routing_rule=result.routing_rule,
+        routing_reason=result.routing_reason,
+        requested_role=result.requested_role,
+        selected_role=result.selected_role,
+        fallback_from=result.fallback_from,
+        fallback_reason=result.fallback_reason,
+        latency_ms=result.latency_ms,
+        degraded=result.degraded,
+        degradation_reason=result.degradation_reason,
+        answerability=result.answerability,
+        missing_context=result.missing_context,
+        timing=result.timing,
+        focus_entity_id=result.focus_entity_id,
+        focus_entity_label=result.focus_entity_label,
+        safety_note=_SAFETY_NOTE,
+        related_artifacts={},
+        context_snapshot_id=turn.context_snapshot_id,  # Phase 17E
+    )
